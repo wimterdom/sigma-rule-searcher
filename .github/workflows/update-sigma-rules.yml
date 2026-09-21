@@ -23,7 +23,12 @@ jobs:
       - name: Check SigmaHQ for a new commit
         id: check
         run: |
-          NEW=$(git ls-remote https://github.com/SigmaHQ/sigma.git HEAD | cut -f1)
+          # 只取 master 分支；"HEAD" 這個樣式也會比對到 refs/remotes/origin/HEAD，會回傳兩行
+          NEW=$(git ls-remote --exit-code https://github.com/SigmaHQ/sigma.git refs/heads/master | head -n1 | cut -f1)
+          if ! echo "$NEW" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "無法取得 SigmaHQ 最新 commit：'$NEW'" >&2
+            exit 1
+          fi
           OLD=$(python3 -c "import json,pathlib;p=pathlib.Path('data/version.json');print(json.loads(p.read_text())['commit'] if p.exists() else '')")
           echo "new=$NEW" >> "$GITHUB_OUTPUT"
           echo "old=$OLD" >> "$GITHUB_OUTPUT"
