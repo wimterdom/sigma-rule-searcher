@@ -1,0 +1,68 @@
+name: Update Sigma rules
+
+on:
+  schedule:
+    # 每週日 16:00 UTC = 台北時間每週一 00:00（即週日 24:00）
+    - cron: '0 16 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-sigma-rules
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check SigmaHQ for a new commit
+        id: check
+        run: |
+          NEW=$(git ls-remote https://github.com/SigmaHQ/sigma.git HEAD | cut -f1)
+          OLD=$(python3 -c "import json,pathlib;p=pathlib.Path('data/version.json');print(json.loads(p.read_text())['commit'] if p.exists() else '')")
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "old=$OLD" >> "$GITHUB_OUTPUT"
+          if [ "$NEW" = "$OLD" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "SigmaHQ 無新 commit（$OLD），跳過更新。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        if: steps.check.outputs.skip == 'false'
+        run: pip install pyyaml
+
+      - name: Clone SigmaHQ rules
+        if: steps.check.outputs.skip == 'false'
+        run: git clone --depth 1 https://github.com/SigmaHQ/sigma.git "$RUNNER_TEMP/sigma"
+
+      - name: Rebuild rule database
+        if: steps.check.outputs.skip == 'false'
+        run: python3 build_db.py "$RUNNER_TEMP/sigma" data/rules.json
+
+      - name: Commit and push
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          if git diff --quiet -- data; then
+            echo "規則內容無變動，不需 commit。" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          COUNT=$(python3 -c "import json;print(json.load(open('data/version.json'))['count'])")
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git commit -m "chore: 更新 Sigma 規則庫至 ${{ steps.check.outputs.new }} (${COUNT} 條)"
+          git push
+          echo "已更新：${{ steps.check.outputs.old }} → ${{ steps.check.outputs.new }}，共 ${COUNT} 條規則。" >> "$GITHUB_STEP_SUMMARY"
